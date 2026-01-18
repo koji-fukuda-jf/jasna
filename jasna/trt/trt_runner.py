@@ -1,14 +1,17 @@
 import torch
 from pathlib import Path
 import tensorrt as trt
-from jasna.tensorrt import _engine_io_names, _trt_dtype_to_torch
+from jasna.trt import _engine_io_names, _trt_dtype_to_torch
+
 
 class TrtRunner:
-    def __init__(self, 
-        engine_path: Path, 
-        stream: torch.cuda.Stream, 
-        input_shape: tuple[int, int, int, int], 
-        device: torch.device) -> None:
+    def __init__(
+        self,
+        engine_path: Path,
+        stream: torch.cuda.Stream,
+        input_shape: tuple[int, int, int, int],
+        device: torch.device,
+    ) -> None:
         self.engine_path = engine_path
         self.stream = stream
         self.input_shape = input_shape
@@ -35,10 +38,8 @@ class TrtRunner:
             self.outputs[name] = t
             self.context.set_tensor_address(name, int(t.data_ptr()))
 
-    def infer(
-        self,
-        x: torch.Tensor,
-    ) -> dict[str, "torch.Tensor"]:
+    def infer(self, x: torch.Tensor) -> dict[str, "torch.Tensor"]:
         self.context.set_tensor_address(self.input_name, int(x.data_ptr()))
         self.context.execute_async_v3(self.stream.cuda_stream)
         return self.outputs
+

@@ -3,6 +3,7 @@ import os
 import tensorrt as trt
 import torch
 
+
 def _engine_io_names(engine: trt.ICudaEngine) -> tuple[list[str], list[str]]:
     input_names: list[str] = []
     output_names: list[str] = []
@@ -24,6 +25,7 @@ def _engine_io_names(engine: trt.ICudaEngine) -> tuple[list[str], list[str]]:
             output_names.append(name)
     return input_names, output_names
 
+
 def _trt_dtype_to_torch(trt_dtype: trt.DataType) -> torch.dtype:
     if trt_dtype == trt.DataType.FLOAT:
         return torch.float32
@@ -37,17 +39,17 @@ def _trt_dtype_to_torch(trt_dtype: trt.DataType) -> torch.dtype:
         return torch.bool
     raise ValueError(f"Unsupported TensorRT dtype: {trt_dtype}")
 
+
 def compile_onnx_to_tensorrt_engine(
     onnx_path: str | Path,
     fp16: bool = True,
     optimization_level: int = 3,
-    workspace_gb: int = 20
+    workspace_gb: int = 20,
 ) -> Path:
-
     onnx_path = Path(onnx_path)
     suffix = ".fp16" if fp16 else ""
-    suffix += '.win' if os.name == 'nt' else '.linux'
-    suffix += '.engine'
+    suffix += ".win" if os.name == "nt" else ".linux"
+    suffix += ".engine"
     engine_path = onnx_path.with_suffix(suffix)
 
     if engine_path.exists():
@@ -77,10 +79,8 @@ def compile_onnx_to_tensorrt_engine(
     if fp16:
         config.set_flag(trt.BuilderFlag.FP16)
 
-    input_names = []
     for i in range(network.num_inputs):
         t = network.get_input(i)
-        input_names.append(t.name)
         if any(int(d) < 0 for d in t.shape):
             raise ValueError(
                 f"ONNX input '{t.name}' has dynamic shape {tuple(int(d) for d in t.shape)}; "
@@ -101,5 +101,5 @@ def compile_onnx_to_tensorrt_engine(
 
     engine_path.parent.mkdir(parents=True, exist_ok=True)
     engine_path.write_bytes(engine_bytes)
-
     return engine_path
+

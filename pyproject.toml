@@ -22,5 +22,5 @@ dev = [
 ]
 
 [tool.setuptools]
-packages = ["jasna", "jasna.mosaic", "jasna.restorer"]
+packages = ["jasna", "jasna.mosaic", "jasna.restorer", "jasna.trt"]
 

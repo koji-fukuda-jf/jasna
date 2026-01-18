@@ -5,8 +5,8 @@ from pathlib import Path
 import torch
 from torch.nn import functional as F
 
-from jasna.tensorrt import compile_onnx_to_tensorrt_engine
-from jasna.tensorrt.trt_runner import TrtRunner
+from jasna.trt import compile_onnx_to_tensorrt_engine
+from jasna.trt.trt_runner import TrtRunner
 from jasna.mosaic.detections import Detections
 
 

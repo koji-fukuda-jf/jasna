@@ -18,14 +18,14 @@ class Pipeline:
         input_video: Path,
         output_video: Path,
         detection_model,
-        restorer,
+        restoration_pipeline,
         batch_size: int = 4,
         device: torch.device = torch.device("cuda:0"),
     ) -> None:
         self.input_video = input_video
         self.output_video = output_video
         self.detection_model = detection_model
-        self.restorer = restorer
+        self.restoration_pipeline = restoration_pipeline
         self.batch_size = int(batch_size)
         self.device = device
 
@@ -55,7 +55,7 @@ class Pipeline:
                     frames_in = frames
 
                 detections: Detections = self.detection_model(frames_in, target_hw=target_hw)
-                restored = self.restorer.restore(frames_in, detections)[:effective_bs]
+                restored = self.restoration_pipeline.restore(frames_in, detections)[:effective_bs]
 
                 for i in range(effective_bs):
                     encoder.encode(restored[i], int(pts_list[i]))

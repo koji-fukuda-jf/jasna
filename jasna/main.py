@@ -1,13 +1,6 @@
 import argparse
 from pathlib import Path
 
-import torch
-
-from jasna.pipeline import Pipeline
-from jasna.mosaic import RfDetrMosaicDetectionModel
-from jasna.restorer import FramesRestorer
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="jasna")
     parser.add_argument("--input", required=True, type=str, help="Path to input video")
@@ -31,6 +24,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    import torch
+
+    from jasna.mosaic import RfDetrMosaicDetectionModel
+    from jasna.pipeline import Pipeline
+    from jasna.restorer import FramesRestorer, RestorationPipeline
+
     args = build_parser().parse_args()
 
     input_video = Path(args.input)
@@ -59,13 +58,14 @@ def main() -> None:
         batch_size=batch_size,
         device=device,
     )
-    restorer = FramesRestorer(clip_len=8, alpha=0.3)
+    frame_restorer = FramesRestorer(clip_len=8, alpha=0.3)
+    restoration_pipeline = RestorationPipeline(frame_restorer=frame_restorer)
 
     Pipeline(
         input_video=input_video,
         output_video=output_video,
         detection_model=detection_model,
-        restorer=restorer,
+        restoration_pipeline=restoration_pipeline,
         batch_size=batch_size,
         device=device,
     ).run()
