@@ -8,13 +8,10 @@ import torch.nn.functional as F
 from jasna.tracking.clip_tracker import TrackedClip
 
 
-def create_blend_mask(h: int, w: int, mask: torch.Tensor | None = None, border_ratio: float = 0.05) -> torch.Tensor:
+def create_blend_mask(h: int, w: int, device: torch.device, border_ratio: float = 0.05) -> torch.Tensor:
     """
     Create a blend mask with soft edges using inner rectangle + box blur approach.
-    The mask dimensions (h, w) define the blend area, optional mask adds extra coverage.
     """
-    device = mask.device if mask is not None else 'cpu'
-    
     h_inner, w_inner = int(h * (1.0 - border_ratio)), int(w * (1.0 - border_ratio))
     h_outer, w_outer = h - h_inner, w - w_inner
     border_size = min(h_outer, w_outer)
@@ -35,13 +32,9 @@ def create_blend_mask(h: int, w: int, mask: torch.Tensor | None = None, border_r
     
     blend = F.pad(inner, (pad_left, pad_right, pad_top, pad_bottom), value=0.0)
     
-    if mask is not None:
-        mask_bool = (mask > 0).float()
-        blend = torch.maximum(mask_bool, blend)
-    
     kernel = torch.ones((1, 1, blur_size, blur_size), device=device, dtype=torch.float32) / (blur_size ** 2)
     pad_size = blur_size // 2
-    blend_4d = F.pad(blend.unsqueeze(0).unsqueeze(0), (pad_size, pad_size, pad_size, pad_size), mode='reflect')
+    blend_4d = F.pad(blend.unsqueeze(0).unsqueeze(0), (pad_size, pad_size, pad_size, pad_size), mode='replicate')
     blend = F.conv2d(blend_4d, kernel).squeeze(0).squeeze(0)
     
     return blend
@@ -99,10 +92,10 @@ class FrameBuffer:
             crop_h = y2 - y1
             crop_w = x2 - x1
 
-            mask_crop = mask[y1:y2, x1:x2]
-            actual_h, actual_w = mask_crop.shape
-            if actual_h < crop_h or actual_w < crop_w:
-                crop_h, crop_w = actual_h, actual_w
+            frame_h, frame_w = mask.shape
+            if y2 > frame_h or x2 > frame_w:
+                crop_h = min(crop_h, frame_h - y1)
+                crop_w = min(crop_w, frame_w - x1)
 
             restored_resized = F.interpolate(
                 restored.unsqueeze(0).float(),
@@ -111,13 +104,11 @@ class FrameBuffer:
                 align_corners=False
             ).squeeze(0)
 
-            mask_crop = mask_crop.to(device=restored.device)
-            blend_mask = create_blend_mask(crop_h, crop_w, mask_crop)
+            blend_mask = create_blend_mask(crop_h, crop_w, restored.device)
 
             blended = pending.blended_frame
             original_crop = blended[:, y1:y1 + crop_h, x1:x1 + crop_w].float()
             
-            # Blend: result = (restored - original) * mask + original
             blended_crop = (restored_resized - original_crop) * blend_mask.unsqueeze(0) + original_crop
             blended[:, y1:y1 + crop_h, x1:x1 + crop_w] = blended_crop.round().clamp(0, 255).to(blended.dtype)
 
