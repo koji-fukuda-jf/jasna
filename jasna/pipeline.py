@@ -5,12 +5,12 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from tqdm import tqdm
 
 from jasna.media import get_video_meta_data
 from jasna.media.video_decoder import NvidiaVideoReader
 from jasna.media.video_encoder import NvidiaVideoEncoder
 from jasna.mosaic import Detections
+from jasna.progressbar import Progressbar
 from jasna.tracking import ClipTracker, FrameBuffer
 from jasna.restorer import RestorationPipeline
 
@@ -52,88 +52,97 @@ class Pipeline:
             NvidiaVideoEncoder(str(self.output_video), device=self.device, stream=stream, metadata=metadata, stream_mode=False) as encoder,
             torch.inference_mode(),
             torch.cuda.stream(stream),
-            tqdm(total=reader.total_frames if reader.total_frames else None, unit="frame", dynamic_ncols=True) as pb,
         ):
+            total_frames = reader.total_frames if reader.total_frames else 1
+            pb = Progressbar(total_frames=total_frames, video_fps=metadata.video_fps)
+            pb.init()
+            
             target_hw = (int(reader.decoder.Height), int(reader.decoder.Width))
             frame_idx = 0
 
-            for frames, pts_list in reader.frames():
-                effective_bs = len(pts_list)
-                if effective_bs == 0:
-                    continue
+            try:
+                for frames, pts_list in reader.frames():
+                    effective_bs = len(pts_list)
+                    if effective_bs == 0:
+                        continue
 
-                frames_eff = frames[:effective_bs]
-                if effective_bs < self.batch_size:
-                    pad = frames_eff[-1:].expand(self.batch_size - effective_bs, -1, -1, -1)
-                    frames_in = torch.cat([frames_eff, pad], dim=0)
-                else:
-                    frames_in = frames
+                    frames_eff = frames[:effective_bs]
+                    if effective_bs < self.batch_size:
+                        pad = frames_eff[-1:].expand(self.batch_size - effective_bs, -1, -1, -1)
+                        frames_in = torch.cat([frames_eff, pad], dim=0)
+                    else:
+                        frames_in = frames
 
-                detections: Detections = self.detection_model(frames_in, target_hw=target_hw)
+                    detections: Detections = self.detection_model(frames_in, target_hw=target_hw)
 
-                for i in range(effective_bs):
-                    current_frame_idx = frame_idx + i
-                    pts = int(pts_list[i])
-                    frame = frames_eff[i]
+                    for i in range(effective_bs):
+                        current_frame_idx = frame_idx + i
+                        pts = int(pts_list[i])
+                        frame = frames_eff[i]
 
-                    keep_k = np.isfinite(detections.scores[i].numpy())
-                    valid_boxes = detections.boxes_xyxy[i][keep_k]
-                    valid_masks = detections.masks[i][keep_k]
-                    n_detections = valid_boxes.shape[0]
+                        keep_k = np.isfinite(detections.scores[i].numpy())
+                        valid_boxes = detections.boxes_xyxy[i][keep_k]
+                        valid_masks = detections.masks[i][keep_k]
+                        n_detections = valid_boxes.shape[0]
 
-                    if n_detections > 0:
-                        log.debug("frame %d: %d detection(s)", current_frame_idx, n_detections)
+                        if n_detections > 0:
+                            log.debug("frame %d: %d detection(s)", current_frame_idx, n_detections)
 
-                    ended_clips, active_track_ids = tracker.update(
-                        current_frame_idx, valid_boxes, valid_masks
-                    )
+                        ended_clips, active_track_ids = tracker.update(
+                            current_frame_idx, valid_boxes, valid_masks
+                        )
 
-                    new_tracks = active_track_ids - active_tracks
-                    for track_id in new_tracks:
-                        log.debug("clip %d started at frame %d", track_id, current_frame_idx)
-                    active_tracks = (active_tracks | active_track_ids) - {c.track_id for c in ended_clips}
+                        new_tracks = active_track_ids - active_tracks
+                        for track_id in new_tracks:
+                            log.debug("clip %d started at frame %d", track_id, current_frame_idx)
+                        active_tracks = (active_tracks | active_track_ids) - {c.track_id for c in ended_clips}
 
-                    frame_buffer.add_frame(current_frame_idx, pts, frame, active_track_ids)
+                        frame_buffer.add_frame(current_frame_idx, pts, frame, active_track_ids)
 
-                    for clip in ended_clips:
-                        log.debug("clip %d ended: frames %d-%d (%d frames)", clip.track_id, clip.start_frame, clip.end_frame, clip.frame_count)
-                        frames_for_clip = [frame_buffer.get_frame(fi) for fi in clip.frame_indices()]
-                        frames_for_clip = [f for f in frames_for_clip if f is not None]
-                        if frames_for_clip:
-                            restored_regions = self.restoration_pipeline.restore_clip(
-                                clip, frames_for_clip
-                            )
-                            log.debug("clip %d restored", clip.track_id)
-                            frame_buffer.blend_clip(clip, restored_regions)
-                            log.debug("clip %d blended onto frames %d-%d", clip.track_id, clip.start_frame, clip.end_frame)
+                        for clip in ended_clips:
+                            log.debug("clip %d ended: frames %d-%d (%d frames)", clip.track_id, clip.start_frame, clip.end_frame, clip.frame_count)
+                            frames_for_clip = [frame_buffer.get_frame(fi) for fi in clip.frame_indices()]
+                            frames_for_clip = [f for f in frames_for_clip if f is not None]
+                            if frames_for_clip:
+                                restored_regions = self.restoration_pipeline.restore_clip(
+                                    clip, frames_for_clip
+                                )
+                                log.debug("clip %d restored", clip.track_id)
+                                frame_buffer.blend_clip(clip, restored_regions)
+                                log.debug("clip %d blended onto frames %d-%d", clip.track_id, clip.start_frame, clip.end_frame)
 
-                    ready_frames = frame_buffer.get_ready_frames()
-                    for ready_idx, ready_frame, ready_pts in ready_frames:
-                        encoder.encode(ready_frame, ready_pts)
-                        log.debug("frame %d encoded (pts=%d)", ready_idx, ready_pts)
+                        ready_frames = frame_buffer.get_ready_frames()
+                        for ready_idx, ready_frame, ready_pts in ready_frames:
+                            encoder.encode(ready_frame, ready_pts)
+                            log.debug("frame %d encoded (pts=%d)", ready_idx, ready_pts)
 
-                frame_idx += effective_bs
-                pb.update(effective_bs)
+                    frame_idx += effective_bs
+                    pb.update(effective_bs)
 
-            final_clips = tracker.flush()
-            if final_clips:
-                log.debug("flushing %d remaining clip(s)", len(final_clips))
-            for clip in final_clips:
-                log.debug("clip %d ended: frames %d-%d (%d frames)", clip.track_id, clip.start_frame, clip.end_frame, clip.frame_count)
-                frames_for_clip = [frame_buffer.get_frame(fi) for fi in clip.frame_indices()]
-                frames_for_clip = [f for f in frames_for_clip if f is not None]
-                if frames_for_clip:
-                    restored_regions = self.restoration_pipeline.restore_clip(
-                        clip, frames_for_clip
-                    )
-                    log.debug("clip %d restored", clip.track_id)
-                    frame_buffer.blend_clip(clip, restored_regions)
-                    log.debug("clip %d blended onto frames %d-%d", clip.track_id, clip.start_frame, clip.end_frame)
+                final_clips = tracker.flush()
+                if final_clips:
+                    log.debug("flushing %d remaining clip(s)", len(final_clips))
+                for clip in final_clips:
+                    log.debug("clip %d ended: frames %d-%d (%d frames)", clip.track_id, clip.start_frame, clip.end_frame, clip.frame_count)
+                    frames_for_clip = [frame_buffer.get_frame(fi) for fi in clip.frame_indices()]
+                    frames_for_clip = [f for f in frames_for_clip if f is not None]
+                    if frames_for_clip:
+                        restored_regions = self.restoration_pipeline.restore_clip(
+                            clip, frames_for_clip
+                        )
+                        log.debug("clip %d restored", clip.track_id)
+                        frame_buffer.blend_clip(clip, restored_regions)
+                        log.debug("clip %d blended onto frames %d-%d", clip.track_id, clip.start_frame, clip.end_frame)
 
-            remaining_frames = frame_buffer.flush()
-            if remaining_frames:
-                log.debug("encoding %d remaining frame(s)", len(remaining_frames))
-            for ready_idx, ready_frame, ready_pts in remaining_frames:
-                encoder.encode(ready_frame, ready_pts)
-                log.debug("frame %d encoded (pts=%d)", ready_idx, ready_pts)
+                remaining_frames = frame_buffer.flush()
+                if remaining_frames:
+                    log.debug("encoding %d remaining frame(s)", len(remaining_frames))
+                for ready_idx, ready_frame, ready_pts in remaining_frames:
+                    encoder.encode(ready_frame, ready_pts)
+                    log.debug("frame %d encoded (pts=%d)", ready_idx, ready_pts)
+            except Exception:
+                pb.error = True
+                raise
+            finally:
+                pb.close(ensure_completed_bar=True)
 
