@@ -34,6 +34,10 @@ class FrameBuffer:
             blended_frame=blended,
         )
 
+    def get_frame(self, frame_idx: int) -> torch.Tensor | None:
+        pending = self.frames.get(frame_idx)
+        return pending.frame if pending else None
+
     def blend_clip(self, clip: TrackedClip, restored_regions: list[torch.Tensor]) -> None:
         """
         Blend restored regions from a clip onto the pending frames.
@@ -48,35 +52,31 @@ class FrameBuffer:
             if clip.track_id not in pending.pending_clips:
                 continue
 
-            bbox = clip.bboxes[i]
+            bbox = clip.bboxes[i].int()
             mask = clip.masks[i]
             restored = restored_regions[i]
 
-            x1, y1, x2, y2 = bbox.int().tolist()
-            x1 = max(0, x1)
-            y1 = max(0, y1)
+            x1 = bbox[0].clamp(min=0)
+            y1 = bbox[1].clamp(min=0)
+            x2 = bbox[2]
+            y2 = bbox[3]
 
             crop_h = y2 - y1
             crop_w = x2 - x1
             restored_resized = restored[:, :crop_h, :crop_w]
 
             mask_crop = mask[y1:y2, x1:x2]
-            if mask_crop.shape[0] != crop_h or mask_crop.shape[1] != crop_w:
-                min_h = min(mask_crop.shape[0], crop_h)
-                min_w = min(mask_crop.shape[1], crop_w)
-                mask_crop = mask_crop[:min_h, :min_w]
-                restored_resized = restored_resized[:, :min_h, :min_w]
-                crop_h, crop_w = min_h, min_w
+            actual_h, actual_w = mask_crop.shape
+            if actual_h < crop_h or actual_w < crop_w:
+                crop_h, crop_w = actual_h, actual_w
+                restored_resized = restored_resized[:, :crop_h, :crop_w]
 
             blended = pending.blended_frame
-            region = blended[:, y1 : y1 + crop_h, x1 : x1 + crop_w]
-
-            blended_region = torch.where(
+            blended[:, y1:y1 + crop_h, x1:x1 + crop_w] = torch.where(
                 mask_crop.unsqueeze(0),
                 restored_resized,
-                region,
+                blended[:, y1:y1 + crop_h, x1:x1 + crop_w],
             )
-            blended[:, y1 : y1 + crop_h, x1 : x1 + crop_w] = blended_region
 
             pending.pending_clips.discard(clip.track_id)
 
