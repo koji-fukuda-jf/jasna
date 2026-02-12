@@ -76,3 +76,16 @@ def test_cli_creates_stream_on_chosen_device(tmp_path: Path) -> None:
 
     assert any(d == torch.device("cuda:1") for d in device_capture)
     assert pipeline_capture["device"] == torch.device("cuda:1")
+
+
+def test_build_parser_accepts_lada_yolo_v4_accurate_choice() -> None:
+    from jasna.main import build_parser
+
+    parser = build_parser()
+    args = parser.parse_args([
+        "--input", "in.mp4",
+        "--output", "out.mp4",
+        "--detection-model", "lada-yolo-v4_accurate",
+    ])
+
+    assert args.detection_model == "lada-yolo-v4_accurate"

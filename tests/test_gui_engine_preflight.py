@@ -109,3 +109,15 @@ def test_preflight_uses_yolo_engine_name_when_selected(monkeypatch, tmp_path: Pa
     suffix = ".fp16.win.engine" if os.name == "nt" else ".fp16.linux.engine"
     assert yolo_req.paths == (Path("model_weights") / f"lada_mosaic_detection_model_v4_fast{suffix}",)
 
+def test_preflight_uses_yolo_accurate_engine_name_when_selected(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "model_weights").mkdir(parents=True, exist_ok=True)
+
+    settings = AppSettings(detection_model="lada-yolo-v4_accurate")
+    res = run_engine_preflight(settings)
+
+    yolo_req = next(r for r in res.requirements if r.key == "yolo")
+    suffix = ".fp16.win.engine" if os.name == "nt" else ".fp16.linux.engine"
+    assert yolo_req.paths == (Path("model_weights") / f"lada_mosaic_detection_model_v4_accurate{suffix}",)
+
+
